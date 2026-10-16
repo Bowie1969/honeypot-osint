@@ -1,0 +1,10 @@
+services:
+  honeypot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./logs:/data
+    environment:
+      HONEYPOT_BRAND: "Northgate Logistics"

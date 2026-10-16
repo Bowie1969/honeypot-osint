@@ -1,0 +1,4 @@
+logs/*.jsonl
+osint/indicators.json
+__pycache__/
+*.pyc
