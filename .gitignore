@@ -1,4 +1,16 @@
-logs/*.jsonl
-osint/indicators.json
+# Raw honeypot / attacker logs (large, sensitive, never commit)
+cowrie-logs/
+logs/
+
+# Python bytecode
 __pycache__/
 *.pyc
+
+# Local Flowsint credentials and session scratch state
+.flowsint-creds.json
+.flowsint-sketch.json
+
+# Generated pipeline artifacts (rebuild from build_graph.py)
+flowsint_graph.json
+flowsint_graph.png
+osint/indicators.json

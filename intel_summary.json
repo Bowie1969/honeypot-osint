@@ -1,0 +1,21 @@
+{
+  "window": "2026-09-27 to 2026-10-16 (18 days)",
+  "total_events": 547857,
+  "total_sessions": 99353,
+  "unique_source_ips": 1605,
+  "ips_reaching_shell": 117,
+  "campaigns": 5,
+  "top_successful_cred": [
+    "admin:admin",
+    5434
+  ],
+  "malware_samples_captured": "multi-arch ELF (ARM/MIPS/x86-64/RISC-V) + shell droppers",
+  "c2_infrastructure": [
+    "213.232.114.14",
+    "144.202.28.52",
+    "45.32.215.222",
+    "217.60.102.5"
+  ],
+  "graph_nodes": 47,
+  "graph_edges": 50
+}
