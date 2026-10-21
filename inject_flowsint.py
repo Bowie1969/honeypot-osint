@@ -2,9 +2,16 @@
 """Push the honeypot intel graph into a Flowsint sketch via its local API."""
 import json, os, sys, urllib.request, urllib.parse, urllib.error
 
-API = "http://127.0.0.1:5001/api"
-HERE = os.path.dirname(__file__)
-CRED_FILE = os.path.join(HERE, ".flowsint-creds.json")
+# Target is configurable so the same injector can feed either the local flowsint
+# instance or the MalwareBox deployment, without sharing credentials or sketch ids.
+API = os.environ.get("FLOWSINT_API", "http://127.0.0.1:5001/api")
+HERE = os.path.dirname(os.path.abspath(__file__))
+_SUFFIX = os.environ.get("FLOWSINT_PROFILE", "")
+CRED_FILE = os.environ.get("FLOWSINT_CREDS",
+    os.path.join(HERE, f".flowsint-creds{_SUFFIX}.json"))
+SKETCH_FILE = os.environ.get("FLOWSINT_SKETCH",
+    os.path.join(HERE, f".flowsint-sketch{_SUFFIX}.json"))
+UI = os.environ.get("FLOWSINT_UI", "http://localhost:5173")
 
 def call(method, path, token=None, json_body=None, form_body=None):
     url = API + path
@@ -41,8 +48,17 @@ if st!=200: print("login failed",st,tok); sys.exit(1)
 token = tok["access_token"]; print("login -> ok")
 
 # --- investigation + sketch ---
+try:
+    _sm = json.load(open(os.path.join(HERE,"intel_summary.json")))
+    _desc = (f"SSH honeypot capture, DigitalOcean syd1 (134.199.170.29). "
+             f"Window {_sm.get('window','?')}; {_sm.get('total_events',0):,} events, "
+             f"{_sm.get('total_sessions',0):,} sessions, {_sm.get('unique_source_ips',0):,} unique source IPs, "
+             f"{_sm.get('ips_reaching_shell',0)} reached a shell, "
+             f"{_sm.get('distinct_sample_hashes',0)} distinct sample hashes.")
+except Exception:
+    _desc = "SSH honeypot capture, DigitalOcean syd1 (134.199.170.29)"
 st,inv = call("POST","/investigations/create",token=token,
-    json_body={"name":"Cowrie Honeypot — prod-db-01","description":"18-day SSH honeypot capture, DigitalOcean syd1 (134.199.170.29)"})
+    json_body={"name":"Cowrie Honeypot — prod-db-01","description":_desc})
 print(f"investigation -> {st}"); inv_id = inv["id"]
 st,sk = call("POST","/sketches/create",token=token,
     json_body={"title":"Attacker infrastructure map","description":"Campaigns, source IPs, ASNs, C2/payload hosts, malware, credentials","investigation_id":inv_id})
@@ -81,5 +97,6 @@ for e in graph["edges"]:
     else: print(f"  edge {e['source']}->{e['target']} -> {st} {str(r)[:120]}")
 print(f"edges added: {oke}/{len(graph['edges'])}  (skipped {skipped} unmapped)")
 
-json.dump({"investigation_id":inv_id,"sketch_id":sketch_id},open(os.path.join(HERE,".flowsint-sketch.json"),"w"),indent=2)
-print(f"\nOpen: http://localhost:5173/dashboard/sketches/{sketch_id}  (login: {cred['email']})")
+json.dump({"investigation_id":inv_id,"sketch_id":sketch_id},open(SKETCH_FILE,"w"),indent=2)
+os.chmod(SKETCH_FILE,0o600)
+print(f"\nOpen: {UI}/dashboard/sketches/{sketch_id}  (login: {cred['email']})")

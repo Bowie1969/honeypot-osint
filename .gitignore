@@ -14,3 +14,5 @@ __pycache__/
 flowsint_graph.json
 flowsint_graph.png
 osint/indicators.json
+.flowsint-creds*.json
+.flowsint-sketch*.json

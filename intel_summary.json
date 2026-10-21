@@ -1,21 +1,62 @@
 {
-  "window": "2026-09-27 to 2026-10-16 (18 days)",
-  "total_events": 547857,
-  "total_sessions": 99353,
-  "unique_source_ips": 1605,
-  "ips_reaching_shell": 117,
+  "window": "2026-09-27T14:01:30.458980Z to 2026-10-20T02:48:28.542151Z",
+  "log_files_read": 24,
+  "total_events": 674912,
+  "total_sessions": 121566,
+  "unique_source_ips": 1999,
+  "ips_reaching_shell": 154,
   "campaigns": 5,
   "top_successful_cred": [
     "admin:admin",
-    5434
+    7419
   ],
-  "malware_samples_captured": "multi-arch ELF (ARM/MIPS/x86-64/RISC-V) + shell droppers",
+  "distinct_sample_hashes": 80,
+  "samples_with_payload_url": 34,
+  "samples_attacker_authored": 46,
+  "top_sample": [
+    "af77b643964afd794460d28ab8a11b0ec8790cd5463abfde126613a4f3bccd32",
+    2426
+  ],
+  "top_payload_urls": [
+    [
+      "http://213.232.114.14/handshakebins.sh",
+      51
+    ],
+    [
+      "http://213.232.114.14/nokillbins/handshakebins.sh",
+      39
+    ],
+    [
+      "http://213.232.114.14/telnetd",
+      33
+    ],
+    [
+      "http://213.232.114.14/nokillbins/telnetd",
+      25
+    ],
+    [
+      "http://213.232.114.14/telnet",
+      19
+    ]
+  ],
+  "samples_statically_triaged": 100,
+  "triage_hash_verified": 100,
+  "triage_file_types": {
+    "ELF 32-bit LSB executable": 30,
+    "ELF 64-bit LSB executable": 16,
+    "sticky ELF 64-bit LSB executable": 10,
+    "Bourne-Again shell script": 8,
+    "ELF 32-bit MSB executable": 8,
+    "POSIX shell script": 7,
+    "sticky PE32 executable (GUI) Intel 80386": 5,
+    "ASCII text": 4
+  },
   "c2_infrastructure": [
     "213.232.114.14",
     "144.202.28.52",
     "45.32.215.222",
     "217.60.102.5"
   ],
-  "graph_nodes": 47,
-  "graph_edges": 50
+  "graph_nodes": 88,
+  "graph_edges": 150
 }

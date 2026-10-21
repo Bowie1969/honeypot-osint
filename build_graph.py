@@ -11,7 +11,13 @@ in OSINT below so the graph is reproducible.
 """
 import json, collections, os
 
-LOG = os.path.join(os.path.dirname(__file__), "cowrie-logs", "all.json")
+import glob
+# all.json is a DERIVED/partial export (547,857 lines) and is NOT a concat of the
+# rotated set (674,912 lines) — read the rotated + live files instead. Note the
+# rotated names have no trailing ".json", so glob on "cowrie.json*".
+_LOGDIR = os.path.join(os.path.dirname(__file__), "cowrie-logs")
+LOGS = [f for f in sorted(glob.glob(os.path.join(_LOGDIR, "cowrie.json*")))
+        if os.path.isfile(f)]
 OUT = os.path.dirname(__file__)
 HONEYPOT_IP = "134.199.170.29"
 
@@ -59,10 +65,23 @@ sess_ip = {}
 total_events = 0
 sessions = set()
 
-for line in open(LOG):
+# real captured samples: sha256 -> drop count / dropping ips / payload urls / sessions
+sample_hits = collections.Counter()
+sample_ips = collections.defaultdict(set)
+sample_urls = collections.defaultdict(set)
+sample_sess = collections.defaultdict(set)
+url_hits = collections.Counter()
+ts_min = ts_max = None
+
+for _lf in LOGS:
+  for line in open(_lf, errors="replace"):
     try: e = json.loads(line)
     except: continue
     total_events += 1
+    _ts = e.get("timestamp")
+    if _ts:
+        if ts_min is None or _ts < ts_min: ts_min = _ts
+        if ts_max is None or _ts > ts_max: ts_max = _ts
     eid = e.get("eventid",""); s = e.get("session"); ip = e.get("src_ip")
     if s: sessions.add(s)
     if eid == "cowrie.session.connect" and ip: ip_hits[ip]+=1
@@ -70,10 +89,17 @@ for line in open(LOG):
         cred_ok[f"{e.get('username')}:{e.get('password')}"]+=1
     if eid == "cowrie.command.input" and s:
         sess_cmds[s].append(e.get("input","")); sess_ip[s]=ip; ip_shell[ip]+=1
-    if eid in ("cowrie.session.file_download","cowrie.session.file_upload") and ip:
+    if eid in ("cowrie.session.file_download","cowrie.session.file_upload"):
         u = e.get("url") or ""
-        for host in OSINT:
-            if host in u: dl_by_ip[ip].add(host)
+        if ip:
+            for host in OSINT:
+                if host in u: dl_by_ip[ip].add(host)
+        _h = e.get("shasum")
+        if _h:
+            sample_hits[_h] += 1
+            if ip: sample_ips[_h].add(ip)
+            if u: sample_urls[_h].add(u); url_hits[u] += 1
+            if e.get("session"): sample_sess[_h].add(e["session"])
     if eid == "cowrie.direct-tcpip.request":
         dst = e.get("dst_ip","")
         relay[dst]+=1
@@ -158,36 +184,83 @@ for host,(camp,_) in C2.items():
          PALETTE["asn"],"Network","square",14)
     edge(host,aid,"HOSTED_BY")
 
-# malware samples (grouped by arch, from captured downloads dir)
-SAMPLES = {
- "ELF-ARM":("07c0a0af…ARM","ELF 32-bit ARM, static, Mirai-family"),
- "ELF-MIPS":("0cb93f4a…MIPS","ELF 32-bit MIPS, static, stripped"),
- "ELF-x86_64":("1f3484b7…x86-64","ELF 64-bit x86-64, packed (no sect. hdr)"),
- "ELF-RISCV":("3f3a11ba…RISC-V","ELF 64-bit RISC-V, static"),
- "SH-dropper":("handshakebins.sh","multi-protocol shell dropper"),
-}
-for sid,(lbl,desc) in SAMPLES.items():
-    node(f"mal:{sid}","malware",lbl,{"family":"Mirai/Gafgyt","arch":sid,"note":desc},
-         PALETTE["malware"],"Bug","circle",12,"red")
-# link samples to the loaders that distribute that family
-for sid in SAMPLES:
-    edge("213.232.114.14",f"mal:{sid}","SERVES") if sid!="SH-dropper" else edge("213.232.114.14","mal:SH-dropper","SERVES")
-edge("144.202.28.52","mal:ELF-x86_64","SERVES"); edge("45.32.215.222","mal:ELF-ARM","SERVES")
-
-# top attacker IPs that actually reached a shell
-top_shell = [ip for ip,_ in ip_shell.most_common(18)]
-for ip in top_shell:
-    if ip == HONEYPOT_IP: continue
+def attacker_node(ip):
+    """Ensure an attacker IP exists as a node (idempotent). Used by both the
+    sample-linkage pass and the top-shell pass so no edge dangles."""
+    if ip == HONEYPOT_IP: return None
     asn,org,geo,abuse = OSINT.get(ip,("?","unattributed","?","?"))
-    node(ip,"ip",ip,{"ip":ip,"connects":ip_hits.get(ip,0),"commands":ip_shell[ip],
+    node(ip,"ip",ip,{"ip":ip,"connects":ip_hits.get(ip,0),"commands":ip_shell.get(ip,0),
                      "asn":asn,"org":org,"geo":geo},
-         PALETTE["attacker"],"Skull","circle",max(8,min(18,ip_shell[ip]//40)),"blue")
-    edge(ip,HONEYPOT_IP,"ATTACKED",weight=min(6,1+ip_shell[ip]//100))
+         PALETTE["attacker"],"Skull","circle",
+         max(8,min(18,ip_shell.get(ip,0)//40 or 8)),"blue")
     if asn!="?":
         aid=f"asn:{asn}"
         node(aid,"asn",f"{asn} {org}",{"asn":asn,"org":org,"geo":geo,"abuse_contact":abuse},
              PALETTE["asn"],"Network","square",14)
         edge(ip,aid,"HOSTED_BY")
+    return ip
+
+# ---- REAL captured samples (actual SHA256 from the logs, not placeholders) ----
+# Two distinct kinds, and conflating them would misrepresent the data:
+#   payload  = fetched from a remote host (has a URL)  -> real dropped malware
+#   authored = written on-box by the attacker (no URL) -> e.g. the `printf > filter`
+#              capability probe, which is the single highest-volume artefact
+PRIMARY["file"] = "filename"
+# Real static-triage results produced ON the honeypot droplet (file type, size,
+# embedded URLs/IPs). Results only — no sample binaries are moved off the droplet.
+_TRIAGE = {}
+_tp = os.path.join(OUT, "sample_triage.json")
+if os.path.exists(_tp):
+    try:
+        _TRIAGE = {x["sha256"]: x for x in json.load(open(_tp)) if x.get("sha256")}
+    except Exception: _TRIAGE = {}
+SAMPLE_TOP = 24
+for _h, _n in sample_hits.most_common(SAMPLE_TOP):
+    _urls = sorted(sample_urls[_h])
+    _authored = not _urls
+    _label = ("authored " if _authored else "") + _h[:12] + "\u2026"
+    _props = {
+        "filename": _h,
+        "hash_sha256": _h,
+        "drop_events": _n,
+        "dropping_ips": len(sample_ips[_h]),
+        "sessions": len(sample_sess[_h]),
+        "origin": "attacker-authored on-box" if _authored else "downloaded from remote host",
+    }
+    _t = _TRIAGE.get(_h)
+    if _t:
+        _props["file_type"] = _t.get("type") or "unknown"
+        _props["size_bytes"] = _t.get("size")
+        _props["hash_verified"] = bool(_t.get("name_matches"))
+        _ft = (_t.get("type") or "").lower()
+        _props["arch"] = ("ELF 32-bit" if "elf 32-bit" in _ft else
+                          "ELF 64-bit" if "elf 64-bit" in _ft else
+                          "Windows PE32" if "pe32" in _ft else
+                          "shell script" if "shell script" in _ft else "other")
+        if _t.get("urls"): _props["embedded_urls"] = ", ".join(_t["urls"][:4])
+        if _t.get("ips"): _props["embedded_ips"] = ", ".join(_t["ips"][:6])
+    if _urls:
+        _props["payload_urls"] = ", ".join(_urls[:4])
+        _props["malware_family"] = "Mirai/Gafgyt" if "handshakebins" in " ".join(_urls) or "telnetd" in " ".join(_urls) else "unclassified"
+    node(f"file:{_h}", "file", _label, _props,
+         PALETTE["malware"] if not _authored else "#868e96",
+         "Bug" if not _authored else "FileCode", "circle",
+         max(8, min(20, 8 + _n // 150)), "red" if not _authored else None)
+    # link each sample to the hosts that served it, and the IPs that dropped it
+    for _u in _urls:
+        for _host in OSINT:
+            if _host in _u:
+                edge(_host, f"file:{_h}", "SERVES", weight=min(6, 1 + _n // 20))
+    for _ip in sorted(sample_ips[_h])[:6]:
+        if attacker_node(_ip):
+            edge(_ip, HONEYPOT_IP, "ATTACKED", weight=1)
+            edge(_ip, f"file:{_h}", "DROPPED", weight=min(5, 1 + _n // 300))
+
+# top attacker IPs that actually reached a shell
+top_shell = [ip for ip,_ in ip_shell.most_common(18)]
+for ip in top_shell:
+    if not attacker_node(ip): continue
+    edge(ip,HONEYPOT_IP,"ATTACKED",weight=min(6,1+ip_shell[ip]//100))
     for c in ip_campaigns.get(ip,[]):
         edge(ip,c,"RAN_CAMPAIGN")
 
@@ -211,18 +284,42 @@ edge(HONEYPOT_IP,"C4_socks_relay_abuse","ABUSED_AS_RELAY")
 for cid in CAMP:
     if cid!="C4_socks_relay_abuse": edge(HONEYPOT_IP,cid,"TARGETED_BY")
 
+# de-duplicate edges by (source,target,label) — both passes can emit ATTACKED
+_seen_e=set(); _ded=[]
+for _e in edges:
+    _k=(_e["source"],_e["target"],_e["label"])
+    if _k in _seen_e: continue
+    _seen_e.add(_k); _ded.append(_e)
+edges=_ded
+
+# fail loudly if any edge references a node that was never created
+_ids={n["id"] for n in nodes}
+_dangling=[e["id"] for e in edges if e["source"] not in _ids or e["target"] not in _ids]
+if _dangling:
+    print(f"WARNING: {len(_dangling)} dangling edges (node missing): {_dangling[:5]}")
+else:
+    print("edge integrity: OK (no dangling references)")
+
 graph={"nodes":nodes,"edges":edges}
 json.dump(graph,open(os.path.join(OUT,"flowsint_graph.json"),"w"),indent=2)
 
 summary={
- "window":"2026-09-27 to 2026-10-16 (18 days)",
+ "window":f"{ts_min} to {ts_max}",
+ "log_files_read":len(LOGS),
  "total_events":total_events,
  "total_sessions":len(sessions),
  "unique_source_ips":len(ip_hits),
  "ips_reaching_shell":len([i for i in ip_shell if i!=HONEYPOT_IP]),
  "campaigns":len(CAMP),
  "top_successful_cred":cred_ok.most_common(1)[0] if cred_ok else None,
- "malware_samples_captured":"multi-arch ELF (ARM/MIPS/x86-64/RISC-V) + shell droppers",
+ "distinct_sample_hashes":len(sample_hits),
+ "samples_with_payload_url":sum(1 for h in sample_hits if sample_urls[h]),
+ "samples_attacker_authored":sum(1 for h in sample_hits if not sample_urls[h]),
+ "top_sample":(sample_hits.most_common(1)[0] if sample_hits else None),
+ "top_payload_urls":url_hits.most_common(5),
+ "samples_statically_triaged":len(_TRIAGE),
+ "triage_hash_verified":sum(1 for v in _TRIAGE.values() if v.get("name_matches")),
+ "triage_file_types":dict(collections.Counter((v.get("type") or "unknown").split(",")[0] for v in _TRIAGE.values()).most_common(8)),
  "c2_infrastructure":list(C2.keys()),
  "graph_nodes":len(nodes),"graph_edges":len(edges),
 }
